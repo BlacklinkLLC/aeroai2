@@ -1,242 +1,360 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AeroAI – Blacklink Labs</title>
-<link href="https://fonts.googleapis.com/css2?family=Open+Dyslexic&display=swap" rel="stylesheet">
-<style>
-:root {
-  --aero-primary: #06b6d4;
-  --aero-gradient: linear-gradient(135deg, #3b82f6, #06b6d4);
-  --aero-hover: #3b82f6;
-  --bg-light: #f9fafb;
-  --bg-dark: #111827;
-  --text-main: #1f2937;
-  --text-light: #6b7280;
-  --user-bg: #ffe5d4;
-  --aero-bg: #f3f4f6;
-  --radius: 12px;
-  --shadow: 0 4px 12px rgba(0,0,0,0.08);
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-}
-
-/* Base Styles */
-body {
-  font-family: var(--font);
-  background-color: var(--bg-light);
-  color: var(--text-main);
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 1rem;
-}
-header { text-align:center; margin-bottom:1rem; }
-header h1 {
-  font-size:2rem;
-  background: var(--aero-gradient);
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-}
-header p { color: var(--text-light); font-size:0.95rem; }
-
-.chat-container {
-  display:flex;
-  flex-direction:column;
-  flex:1;
-  border:1px solid #e5e7eb;
-  border-radius: var(--radius);
-  overflow:hidden;
-  box-shadow: var(--shadow);
-  height: calc(100vh - 200px);
-}
-
-.chat-messages {
-  flex:1;
-  overflow-y:auto;
-  padding:1rem;
-  display:flex;
-  flex-direction:column;
-  gap:0.75rem;
-  background-color: var(--bg-light);
-  font-size:16px;
-}
-
-.message { padding:0.75rem 1rem; border-radius: var(--radius); max-width:75%; box-shadow: var(--shadow); word-break: break-word; position:relative; }
-.user-message { background-color: var(--user-bg); align-self:flex-end; }
-.aero-message { background: var(--aero-gradient); color:white; align-self:flex-start; }
-
-pre { background-color: rgba(0,0,0,0.05); padding:8px; border-radius:6px; overflow-x:auto; position:relative; }
-.copy-btn { position:absolute; top:4px; right:4px; background:var(--aero-primary); color:white; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:0.75rem; }
-
-.typing-indicator { display:none; font-style:italic; color: var(--text-light); padding:0.5rem 1rem; }
-.typing-indicator.visible { display:block; }
-
-.message-input { display:flex; padding:0.75rem; border-top:1px solid #e5e7eb; background:white; }
-#user-input { flex:1; padding:0.75rem; border:1px solid #e5e7eb; border-radius: var(--radius); font-family:inherit; resize:none; min-height:44px; }
-#send-button { margin-left:0.5rem; padding:0 1rem; background:var(--aero-primary); color:white; border:none; border-radius: var(--radius); cursor:pointer; transition: background 0.2s; }
-#send-button:hover { background: var(--aero-hover); }
-#send-button:disabled { background-color: var(--text-light); cursor:not-allowed; }
-
-footer { margin-top:1rem; text-align:center; font-size:0.85rem; color: var(--text-light); }
-
-/* Settings Panel */
-#settings-button { position: fixed; top:10px; right:10px; background: var(--aero-primary); color:white; border:none; border-radius: var(--radius); padding:0.5rem 1rem; cursor:pointer; z-index:101; }
-#settings-panel { position:fixed; top:10%; right:-320px; width:300px; background:white; border:1px solid #e5e7eb; border-radius:var(--radius); box-shadow:0 4px 12px rgba(0,0,0,0.08); padding:1rem; transition:right 0.3s; z-index:100; }
-#settings-panel.open { right:10px; }
-
-/* Accessibility Fonts */
-body.font-dyslexic { font-family: 'OpenDyslexic', sans-serif; }
-
-/* Dark & High Contrast Modes */
-body[data-theme="dark"] { background: var(--bg-dark); color: #f9fafb; }
-body[data-theme="dark"] .chat-messages { background: #1f2937; }
-body[data-theme="high-contrast"] { background:black; color:yellow; }
-body[data-theme="high-contrast"] .user-message { background:gray; color:white; }
-body[data-theme="high-contrast"] .aero-message { background:blue; color:white; }
-</style>
-</head>
-<body>
-<header>
-  <h1>AeroAI</h1>
-  <p>By Blacklink Labs / Blacklink Education</p>
-</header>
-
-<button id="settings-button" aria-label="Open settings">⚙️ Settings</button>
-<div id="settings-panel" aria-label="Settings Panel">
-  <h3>Settings</h3>
-  <label><input type="checkbox" id="tutor-mode"> Tutor Mode</label><br><br>
-  <label>Chunk Size: <input type="number" id="chunk-size" value="1000" min="100" step="100"></label><br><br>
-  <label>Font Size: <input type="range" id="font-size" min="12" max="24" value="16">px</label><br><br>
-  <label>Font: 
-    <select id="font-select">
-      <option value="default">Default</option>
-      <option value="dyslexic">OpenDyslexic</option>
-    </select>
-  </label><br><br>
-  <label>Theme: 
-    <select id="theme-select">
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-      <option value="high-contrast">High Contrast</option>
-    </select>
-  </label><br><br>
-  <label><input type="checkbox" id="tts-toggle"> Read Aloud</label>
-</div>
-
-<div class="chat-container">
-  <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
-    <div class="message aero-message"><p>Hello! I'm Aero, your Blacklink AI assistant. How can I help you today?</p></div>
-  </div>
-
-  <div class="typing-indicator" id="typing-indicator">Aero is thinking...</div>
-
-  <div class="message-input">
-    <textarea id="user-input" placeholder="Type your message..." rows="1" aria-label="Type your message"></textarea>
-    <button id="send-button">Send</button>
-  </div>
-</div>
-
-<footer>
-  <p>&copy; 2025 Blacklink Education – AeroAI</p>
-</footer>
-
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script>
-const chatMessages = document.getElementById("chat-messages");
-const userInput = document.getElementById("user-input");
-const sendButton = document.getElementById("send-button");
-const typingIndicator = document.getElementById("typing-indicator");
-const settingsButton = document.getElementById("settings-button");
-const settingsPanel = document.getElementById("settings-panel");
-const tutorModeCheckbox = document.getElementById("tutor-mode");
-const chunkSizeInput = document.getElementById("chunk-size");
-const fontSizeInput = document.getElementById("font-size");
-const fontSelect = document.getElementById("font-select");
-const themeSelect = document.getElementById("theme-select");
-const ttsToggle = document.getElementById("tts-toggle");
-
-let chatHistory = [{role:"aero", content:"Hello! I'm Aero, your Blacklink AI assistant. How can I help you today?"}];
-let isProcessing=false;
-let tutorMode=false;
-let chunkSize=parseInt(chunkSizeInput.value,10);
-let ttsEnabled=false;
-
-// --- Settings ---
-settingsButton.addEventListener("click",()=>settingsPanel.classList.toggle("open"));
-tutorModeCheckbox.addEventListener("change",()=>tutorMode=tutorModeCheckbox.checked);
-chunkSizeInput.addEventListener("change",()=>chunkSize=parseInt(chunkSizeInput.value,10));
-fontSizeInput.addEventListener("input",()=>chatMessages.style.fontSize=fontSizeInput.value+"px");
-fontSelect.addEventListener("change",()=>{
-  document.body.classList.toggle("font-dyslexic", fontSelect.value==="dyslexic");
-});
-themeSelect.addEventListener("change",()=>document.body.dataset.theme=themeSelect.value);
-ttsToggle.addEventListener("change",()=>ttsEnabled=ttsToggle.checked);
-
-// --- Auto-resize textarea ---
-userInput.addEventListener("input",()=>{userInput.style.height="auto"; userInput.style.height=userInput.scrollHeight+"px";});
-
-// --- Send message ---
-userInput.addEventListener("keydown", e => { if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendMessage(); } });
-sendButton.addEventListener("click",sendMessage);
-
-function addMessage(role, content){
-  const msg = document.createElement("div");
-  msg.className = `message ${role}-message`;
-  msg.innerHTML = marked.parse(content);
-
-  // Copy buttons for code blocks
-  msg.querySelectorAll("pre").forEach(pre=>{
-    if(!pre.querySelector(".copy-btn")){
-      const btn=document.createElement("button");
-      btn.className="copy-btn"; btn.textContent="Copy";
-      btn.onclick=()=>navigator.clipboard.writeText(pre.textContent);
-      pre.appendChild(btn);
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AeroAI – Blacklink Labs</title>
+  <link href="https://fonts.googleapis.com/css2?family=Open+Dyslexic&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --aero-primary: #06b6d4;
+      --aero-gradient: linear-gradient(135deg, #3b82f6, #06b6d4);
+      --aero-hover: #3b82f6;
+      --bg-light: #f9fafb;
+      --bg-dark: #111827;
+      --text-main: #1f2937;
+      --text-light: #6b7280;
+      --user-bg: #ffe5d4;
+      --aero-bg: #f3f4f6;
+      --radius: 12px;
+      --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     }
-  });
 
-  chatMessages.appendChild(msg);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+    /* Base Styles */
+    body {
+      font-family: var(--font);
+      background-color: var(--bg-light);
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
 
-  if(ttsEnabled && role==="aero"){
-    const utterance = new SpeechSynthesisUtterance(msg.textContent);
-    speechSynthesis.speak(utterance);
-  }
-}
+    header {
+      text-align: center;
+      margin-bottom: 1rem;
+    }
 
-async function sendMessage(){
-  let message=userInput.value.trim();
-  if(!message || isProcessing) return;
-  isProcessing=true; userInput.disabled=true; sendButton.disabled=true;
+    header h1 {
+      font-size: 2rem;
+      background: var(--aero-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
 
-  addMessage("user",message);
-  chatHistory.push({role:"user", content:message});
-  userInput.value=""; userInput.style.height="auto";
-  typingIndicator.classList.add("visible");
+    header p {
+      color: var(--text-light);
+      font-size: 0.95rem;
+    }
 
-  // ChunkAugment 2.0 simulation
-  const chunks=[];
-  for(let i=0;i<message.length;i+=chunkSize) chunks.push(message.slice(i,i+chunkSize));
-  const lastChunks = chatHistory.filter(m=>m.role==="aero").slice(-3).map(m=>m.content);
-  const responseEl = document.createElement("div"); responseEl.className="message aero-message"; responseEl.innerHTML="<p></p>";
-  chatMessages.appendChild(responseEl); chatMessages.scrollTop=chatMessages.scrollHeight;
+    .chat-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      border: 1px solid #e5e7eb;
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      height: calc(100vh - 200px);
+    }
 
-  let fullResponse="";
-  for(const chunk of chunks){
-    await new Promise(res=>setTimeout(res,200)); // simulate streaming
-    // Simulated response: reverse text for demo
-    let simulatedResponse=chunk.split("").reverse().join("");
-    fullResponse+=simulatedResponse;
-    responseEl.querySelector("p").innerHTML=marked.parse(fullResponse);
-    chatMessages.scrollTop=chatMessages.scrollHeight;
-  }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      background-color: var(--bg-light);
+      font-size: 16px;
+    }
 
-  chatHistory.push({role:"aero", content:fullResponse});
-  typingIndicator.classList.remove("visible");
-  isProcessing=false; userInput.disabled=false; sendButton.disabled=false; userInput.focus();
-}
-</script>
+    .message {
+      padding: 0.75rem 1rem;
+      border-radius: var(--radius);
+      max-width: 75%;
+      box-shadow: var(--shadow);
+      word-break: break-word;
+      position: relative;
+    }
+
+    .user-message {
+      background-color: var(--user-bg);
+      align-self: flex-end;
+    }
+
+    .aero-message {
+      background: var(--aero-gradient);
+      color: white;
+      align-self: flex-start;
+    }
+
+    pre {
+      background-color: rgba(0, 0, 0, 0.05);
+      padding: 8px;
+      border-radius: 6px;
+      overflow-x: auto;
+      position: relative;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: var(--aero-primary);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 2px 6px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+
+    .typing-indicator {
+      display: none;
+      font-style: italic;
+      color: var(--text-light);
+      padding: 0.5rem 1rem;
+    }
+
+    .typing-indicator.visible {
+      display: block;
+    }
+
+    .message-input {
+      display: flex;
+      padding: 0.75rem;
+      border-top: 1px solid #e5e7eb;
+      background: white;
+    }
+
+    #user-input {
+      flex: 1;
+      padding: 0.75rem;
+      border: 1px solid #e5e7eb;
+      border-radius: var(--radius);
+      font-family: inherit;
+      resize: none;
+      min-height: 44px;
+    }
+
+    #send-button {
+      margin-left: 0.5rem;
+      padding: 0 1rem;
+      background: var(--aero-primary);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    #send-button:hover {
+      background: var(--aero-hover);
+    }
+
+    #send-button:disabled {
+      background-color: var(--text-light);
+      cursor: not-allowed;
+    }
+
+    footer {
+      margin-top: 1rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-light);
+    }
+
+    /* Settings Panel */
+    #settings-button {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: var(--aero-primary);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      z-index: 101;
+    }
+
+    #settings-panel {
+      position: fixed;
+      top: 10%;
+      right: -320px;
+      width: 300px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: var(--radius);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      padding: 1rem;
+      transition: right 0.3s;
+      z-index: 100;
+    }
+
+    #settings-panel.open {
+      right: 10px;
+    }
+
+    /* Accessibility Fonts */
+    body.font-dyslexic {
+      font-family: 'OpenDyslexic', sans-serif;
+    }
+
+    /* Dark & High Contrast Modes */
+    body[data-theme="dark"] {
+      background: var(--bg-dark);
+      color: #f9fafb;
+    }
+
+    body[data-theme="dark"] .chat-messages {
+      background: #1f2937;
+    }
+
+    body[data-theme="high-contrast"] {
+      background: black;
+      color: yellow;
+    }
+
+    body[data-theme="high-contrast"] .user-message {
+      background: gray;
+      color: white;
+    }
+
+    body[data-theme="high-contrast"] .aero-message {
+      background: blue;
+      color: white;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>AeroAI</h1>
+    <p>By Blacklink Labs / Blacklink Education</p>
+  </header>
+
+  <button id="settings-button" aria-label="Open settings">⚙️ Settings</button>
+  <div id="settings-panel" aria-label="Settings Panel">
+    <h3>Settings</h3>
+    <label><input type="checkbox" id="tutor-mode"> Tutor Mode</label><br><br>
+    <label>Chunk Size: <input type="number" id="chunk-size" value="1000" min="100" step="100"></label><br><br>
+    <label>Font Size: <input type="range" id="font-size" min="12" max="24" value="16">px</label><br><br>
+    <label>Font:
+      <select id="font-select">
+        <option value="default">Default</option>
+        <option value="dyslexic">OpenDyslexic</option>
+      </select>
+    </label><br><br>
+    <label>Theme:
+      <select id="theme-select">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="high-contrast">High Contrast</option>
+      </select>
+    </label><br><br>
+    <label><input type="checkbox" id="tts-toggle"> Read Aloud</label>
+  </div>
+
+  <div class="chat-container">
+    <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
+      <div class="message aero-message">
+        <p>Hello! I'm Aero, your Blacklink AI assistant. How can I help you today?</p>
+      </div>
+    </div>
+
+    <div class="typing-indicator" id="typing-indicator">Aero is thinking...</div>
+
+    <div class="message-input">
+      <textarea id="user-input" placeholder="Type your message..." rows="1" aria-label="Type your message"></textarea>
+      <button id="send-button">Send</button>
+    </div>
+  </div>
+
+  <footer>
+    <p>&copy; 2025 Blacklink Education – AeroAI</p>
+  </footer>
+  <script src="chat.js" type="module"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const chatMessages = document.getElementById("chat-messages");
+    const userInput = document.getElementById("user-input");
+    const sendButton = document.getElementById("send-button");
+    const typingIndicator = document.getElementById("typing-indicator");
+    const settingsButton = document.getElementById("settings-button");
+    const settingsPanel = document.getElementById("settings-panel");
+    const tutorModeCheckbox = document.getElementById("tutor-mode");
+    const chunkSizeInput = document.getElementById("chunk-size");
+    const fontSizeInput = document.getElementById("font-size");
+    const fontSelect = document.getElementById("font-select");
+    const themeSelect = document.getElementById("theme-select");
+    const ttsToggle = document.getElementById("tts-toggle");
+
+    let chatHistory = [{ role: "aero", content: "Hello! I'm Aero, your Blacklink AI assistant. How can I help you today?" }];
+    let isProcessing = false;
+    let tutorMode = false;
+    let chunkSize = parseInt(chunkSizeInput.value, 10);
+    let ttsEnabled = false;
+
+    // --- Settings ---
+    settingsButton.addEventListener("click", () => settingsPanel.classList.toggle("open"));
+    tutorModeCheckbox.addEventListener("change", () => tutorMode = tutorModeCheckbox.checked);
+    chunkSizeInput.addEventListener("change", () => chunkSize = parseInt(chunkSizeInput.value, 10));
+    fontSizeInput.addEventListener("input", () => chatMessages.style.fontSize = fontSizeInput.value + "px");
+    fontSelect.addEventListener("change", () => {
+      document.body.classList.toggle("font-dyslexic", fontSelect.value === "dyslexic");
+    });
+    themeSelect.addEventListener("change", () => document.body.dataset.theme = themeSelect.value);
+    ttsToggle.addEventListener("change", () => ttsEnabled = ttsToggle.checked);
+
+    // --- Auto-resize textarea ---
+    userInput.addEventListener("input", () => { userInput.style.height = "auto"; userInput.style.height = userInput.scrollHeight + "px"; });
+
+    // --- Send message ---
+    userInput.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+    sendButton.addEventListener("click", sendMessage);
+
+    function addMessage(role, content) {
+      const msg = document.createElement("div");
+      msg.className = `message ${role}-message`;
+      msg.innerHTML = marked.parse(content);
+
+      // Copy buttons for code blocks
+      msg.querySelectorAll("pre").forEach(pre => {
+        if (!pre.querySelector(".copy-btn")) {
+          const btn = document.createElement("button");
+          btn.className = "copy-btn"; btn.textContent = "Copy";
+          btn.onclick = () => navigator.clipboard.writeText(pre.textContent);
+          pre.appendChild(btn);
+        }
+      });
+
+      chatMessages.appendChild(msg);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+
+      if (ttsEnabled && role === "aero") {
+        const utterance = new SpeechSynthesisUtterance(msg.textContent);
+        speechSynthesis.speak(utterance);
+      }
+    }
+
+    async function sendMessage() {
+      let message = userInput.value.trim();
+      if (!message || isProcessing) return;
+      isProcessing = true; userInput.disabled = true; sendButton.disabled = true;
+
+      addMessage("user", message);
+      chatHistory.push({ role: "user", content: message });
+      userInput.value = ""; userInput.style.height = "auto";
+      typingIndicator.classList.add("visible");
+    }
+  </script>
 </body>
+
 </html>
