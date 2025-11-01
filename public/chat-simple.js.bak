@@ -1,0 +1,472 @@
+/**
+ * AeroAI Free - Frontend Application
+ *
+ * Implements the AeroUI specification with:
+ * - Streaming chat with Aero personality
+ * - Model selection and system mode toggles
+ * - Stop/Regenerate/Clear controls
+ * - Session recovery (last 5 messages)
+ * - Rate limit handling with friendly errors
+ * - AbortController for stop functionality
+ *
+ * @version 4.0.0
+ */
+
+// ============================================================================
+// STATE
+// ============================================================================
+
+const state = {
+  sessionId: generateSessionId(),
+  messages: [],
+  config: null,
+  isGenerating: false,
+  abortController: null,
+  lastUserMessage: null,
+  turnstileToken: null,
+};
+
+// ============================================================================
+// DOM ELEMENTS
+// ============================================================================
+
+const elements = {
+  messages: document.getElementById("messages"),
+  composer: document.getElementById("composer"),
+  prompt: document.getElementById("prompt"),
+  send: document.getElementById("send"),
+  typingIndicator: document.getElementById("typing-indicator"),
+  modelSelect: document.getElementById("model-select"),
+  systemMode: document.getElementById("system-mode"),
+  regenerateBtn: document.getElementById("regenerate-btn"),
+  stopBtn: document.getElementById("stop-btn"),
+  clearBtn: document.getElementById("clear-btn"),
+  errorBanner: document.getElementById("error-banner"),
+  provenanceBanner: document.getElementById("provenance-banner"),
+  modelName: document.getElementById("model-name"),
+  turnstileContainer: document.getElementById("turnstile-container"),
+};
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+async function init() {
+  console.log("🚀 AeroAI Free initializing...");
+
+  // Load config from backend
+  await loadConfig();
+
+  // Setup event listeners
+  setupEventListeners();
+
+  // Load cached messages from localStorage
+  loadCachedMessages();
+
+  // Show welcome message if no cached messages
+  if (state.messages.length === 0) {
+    addMessage("assistant", "👋 Hey there! I'm **Aero** — small, speedy, and mildly smug about it. What can I help you with today?");
+  } else {
+    // Restore messages from cache
+    state.messages.forEach(msg => {
+      addMessage(msg.role, msg.content, false);
+    });
+  }
+
+  // Focus input
+  elements.prompt.focus();
+
+  console.log("✓ AeroAI Free ready");
+}
+
+async function loadConfig() {
+  try {
+    const response = await fetch("/api/config");
+    if (!response.ok) throw new Error("Failed to load config");
+
+    state.config = await response.json();
+
+    // Populate model selector
+    elements.modelSelect.innerHTML = state.config.models
+      .map(m => `<option value="${m.id}">${m.name} (${m.tier})</option>`)
+      .join("");
+
+    // Update provenance banner
+    const provenance = state.config.provenance;
+    elements.modelName.textContent = provenance.model.split('/').pop() || provenance.model;
+
+    console.log("✓ Config loaded:", state.config);
+  } catch (error) {
+    console.error("Failed to load config:", error);
+    showError("Failed to connect to Aero. Please refresh the page.");
+  }
+}
+
+function setupEventListeners() {
+  // Composer submit
+  elements.composer.addEventListener("submit", (e) => {
+    e.preventDefault();
+    handleSend();
+  });
+
+  // Auto-resize textarea
+  elements.prompt.addEventListener("input", () => {
+    elements.prompt.style.height = "auto";
+    elements.prompt.style.height = `${elements.prompt.scrollHeight}px`;
+  });
+
+  // Enter to send, Shift+Enter for newline
+  elements.prompt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  });
+
+  // Toolbar buttons
+  elements.regenerateBtn.addEventListener("click", handleRegenerate);
+  elements.stopBtn.addEventListener("click", handleStop);
+  elements.clearBtn.addEventListener("click", handleClear);
+}
+
+// ============================================================================
+// MESSAGE HANDLING
+// ============================================================================
+
+function addMessage(role, content, save = true) {
+  const li = document.createElement("li");
+  li.className = `message ${role}`;
+  li.setAttribute("role", "article");
+
+  // Parse markdown
+  li.innerHTML = marked.parse(content);
+
+  // Add copy buttons to code blocks
+  addCopyButtons(li);
+
+  elements.messages.appendChild(li);
+  scrollToBottom();
+
+  // Save to state and cache
+  if (save) {
+    state.messages.push({ role, content, timestamp: Date.now() });
+    saveCachedMessages();
+  }
+
+  return li;
+}
+
+function updateMessage(element, content) {
+  element.innerHTML = marked.parse(content);
+  addCopyButtons(element);
+  scrollToBottom();
+}
+
+function addCopyButtons(container) {
+  container.querySelectorAll("pre").forEach(pre => {
+    if (pre.querySelector(".copy-btn")) return;
+
+    const btn = document.createElement("button");
+    btn.className = "copy-btn";
+    btn.textContent = "Copy";
+    btn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(pre.textContent);
+        btn.textContent = "Copied!";
+        setTimeout(() => btn.textContent = "Copy", 2000);
+      } catch (err) {
+        console.error("Failed to copy:", err);
+      }
+    };
+
+    pre.style.position = "relative";
+    pre.appendChild(btn);
+  });
+}
+
+function scrollToBottom() {
+  elements.messages.scrollTo({
+    top: elements.messages.scrollHeight,
+    behavior: "smooth"
+  });
+}
+
+// ============================================================================
+// CHAT OPERATIONS
+// ============================================================================
+
+async function handleSend() {
+  const message = elements.prompt.value.trim();
+  if (!message || state.isGenerating) return;
+
+  // Save user message for potential regeneration
+  state.lastUserMessage = message;
+
+  // Clear input
+  elements.prompt.value = "";
+  elements.prompt.style.height = "auto";
+
+  // Add user message
+  addMessage("user", message);
+
+  // Send to API
+  await sendMessage();
+}
+
+async function handleRegenerate() {
+  if (!state.lastUserMessage || state.isGenerating) return;
+
+  // Remove last assistant message
+  const messages = elements.messages.querySelectorAll(".message.assistant");
+  if (messages.length > 0) {
+    messages[messages.length - 1].remove();
+    state.messages.pop(); // Remove from state
+  }
+
+  // Resend
+  await sendMessage();
+}
+
+async function handleStop() {
+  if (state.abortController) {
+    state.abortController.abort();
+    state.abortController = null;
+    setGeneratingState(false);
+    elements.typingIndicator.classList.remove("visible");
+  }
+}
+
+function handleClear() {
+  if (!confirm("Clear all messages? This cannot be undone.")) return;
+
+  state.messages = [];
+  elements.messages.innerHTML = "";
+  saveCachedMessages();
+
+  // Show welcome message again
+  addMessage("assistant", "👋 Fresh start! What can I help you with?");
+}
+
+async function sendMessage() {
+  setGeneratingState(true);
+  elements.typingIndicator.classList.add("visible");
+  hideError();
+
+  // Create abort controller
+  state.abortController = new AbortController();
+
+  // Prepare request
+  const requestBody = {
+    session_id: state.sessionId,
+    messages: state.messages,
+    model: elements.modelSelect.value || undefined,
+    system_mode: elements.systemMode.value,
+    turnstile_token: state.turnstileToken || undefined,
+  };
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+      signal: state.abortController.signal,
+    });
+
+    // Handle error responses
+    if (!response.ok) {
+      const errorData = await response.json();
+      handleAPIError(response.status, errorData);
+      return;
+    }
+
+    // Handle streaming response
+    await handleStreamingResponse(response);
+
+  } catch (error) {
+    if (error.name === "AbortError") {
+      console.log("Request aborted by user");
+      showError("Generation stopped by user.");
+    } else {
+      console.error("Send error:", error);
+      showError("Oops — Aero ran out of breath. Try again in a moment.");
+    }
+  } finally {
+    elements.typingIndicator.classList.remove("visible");
+    setGeneratingState(false);
+    state.abortController = null;
+  }
+}
+
+async function handleStreamingResponse(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  // Create assistant message element
+  const messageEl = document.createElement("li");
+  messageEl.className = "message assistant";
+  messageEl.setAttribute("role", "article");
+  elements.messages.appendChild(messageEl);
+
+  let fullContent = "";
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+
+      try {
+        const data = JSON.parse(line);
+
+        if (data.response) {
+          fullContent += data.response;
+          updateMessage(messageEl, fullContent);
+        }
+      } catch (e) {
+        // Ignore JSON parse errors for incomplete chunks
+        if (!(e instanceof SyntaxError)) {
+          console.error("Stream parsing error:", e);
+        }
+      }
+    }
+  }
+
+  // Save complete message
+  if (fullContent) {
+    state.messages.push({
+      role: "assistant",
+      content: fullContent,
+      timestamp: Date.now()
+    });
+    saveCachedMessages();
+
+    // Enable regenerate button
+    elements.regenerateBtn.disabled = false;
+  }
+}
+
+function handleAPIError(status, errorData) {
+  const { error, message, retry_after, needs_turnstile } = errorData;
+
+  // Rate limit error
+  if (status === 429) {
+    if (needs_turnstile) {
+      showError("Whoa there, speedy! Complete the challenge below to continue.");
+      showTurnstileChallenge();
+    } else {
+      const retryMsg = retry_after
+        ? ` Try again in ${retry_after} seconds.`
+        : " Slow down a bit, champ.";
+      showError(`Aero's on a coffee break.${retryMsg}`);
+    }
+    return;
+  }
+
+  // Challenge failed
+  if (status === 403 && error === "challenge_failed") {
+    showError("Captcha verification failed. Please try again.");
+    return;
+  }
+
+  // Generic error
+  showError(message || "Oops — something went wrong. Try again?");
+}
+
+// ============================================================================
+// TURNSTILE (Cloudflare Captcha)
+// ============================================================================
+
+function showTurnstileChallenge() {
+  // In production, load Turnstile script and render widget
+  // For now, show placeholder
+  elements.turnstileContainer.classList.add("visible");
+
+  // TODO: Implement actual Turnstile
+  // Load script: https://challenges.cloudflare.com/turnstile/v0/api.js
+  // Render widget with your site key
+  // On success, store token in state.turnstileToken
+
+  console.warn("Turnstile challenge required but not fully implemented");
+}
+
+// ============================================================================
+// UI STATE
+// ============================================================================
+
+function setGeneratingState(generating) {
+  state.isGenerating = generating;
+  elements.prompt.disabled = generating;
+  elements.send.disabled = generating;
+  elements.stopBtn.disabled = !generating;
+  elements.regenerateBtn.disabled = generating;
+
+  if (!generating) {
+    elements.prompt.focus();
+  }
+}
+
+function showError(message) {
+  elements.errorBanner.innerHTML = `<strong>Uh-oh!</strong> ${message}`;
+  elements.errorBanner.classList.add("visible");
+}
+
+function hideError() {
+  elements.errorBanner.classList.remove("visible");
+}
+
+// ============================================================================
+// SESSION RECOVERY (localStorage)
+// ============================================================================
+
+function saveCachedMessages() {
+  try {
+    // Keep only last 5 messages
+    const messagesToCache = state.messages.slice(-5);
+    localStorage.setItem("aero_messages", JSON.stringify(messagesToCache));
+    localStorage.setItem("aero_session_id", state.sessionId);
+  } catch (error) {
+    console.warn("Failed to cache messages:", error);
+  }
+}
+
+function loadCachedMessages() {
+  try {
+    const cached = localStorage.getItem("aero_messages");
+    const cachedSessionId = localStorage.getItem("aero_session_id");
+
+    if (cached) {
+      state.messages = JSON.parse(cached);
+      console.log(`✓ Loaded ${state.messages.length} cached messages`);
+    }
+
+    if (cachedSessionId) {
+      state.sessionId = cachedSessionId;
+    }
+  } catch (error) {
+    console.warn("Failed to load cached messages:", error);
+  }
+}
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+
+function generateSessionId() {
+  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// ============================================================================
+// START
+// ============================================================================
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

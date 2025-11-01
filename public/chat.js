@@ -1,312 +1,555 @@
 /**
- * AeroAI Chat App Frontend - Enhanced
- * 
+ * AeroAI Pro - Advanced Chat Application
+ *
  * Features:
- * - ChunkAugment 2.0: Intelligent chunked message processing
- * - Tutor Mode: Educational context awareness
- * - MD+ Support: Markdown with code blocks and syntax highlighting
- * - Blacklink Terminology: Context-aware responses
- * - TTS: Text-to-speech with queue management
- * - Accessibility: ARIA labels and keyboard navigation
- * 
- * @author Blacklink Labs
- * @version 2.1.0
+ * - Multiple chat sessions with localStorage
+ * - Enhanced markdown (LaTeX, Mermaid, syntax highlighting)
+ * - Debug mode with system override
+ * - Chat management (rename, delete, export, import)
+ * - Message actions (copy, delete, edit)
+ * - Search & keyboard shortcuts
+ * - Token counter
+ *
+ * @version 5.0.0
  */
 
-// ========================================
-// DOM Elements
-// ========================================
-const chatMessages = document.getElementById("chat-messages");
-const userInput = document.getElementById("user-input");
-const sendButton = document.getElementById("send-button");
-const typingIndicator = document.getElementById("typing-indicator");
-const tutorModeCheckbox = document.getElementById("tutor-mode");
-const ttsToggle = document.getElementById("tts-toggle");
-const chunkSizeInput = document.getElementById("chunk-size");
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
 
-// ========================================
-// Application State
-// ========================================
 const state = {
-  chatHistory: [
-    {
-      role: "aero",
-      content: "👋 Hello! I'm **Aero**, your Blacklink AI assistant. How can I help you today?",
-      timestamp: Date.now()
-    }
-  ],
-  isProcessing: false,
-  tutorMode: false,
-  chunkSize: 1000,
-  ttsEnabled: false,
-  ttsQueue: [],
-  currentUtterance: null
+  chats: new Map(),        // chatId -> { id, title, messages, created, updated }
+  currentChatId: null,
+  config: null,
+  isGenerating: false,
+  abortController: null,
+  debugMode: false,
+  debugOverride: "",
 };
 
-// ========================================
-// Configuration
-// ========================================
-const config = {
-  api: {
-    endpoint: "/api/chat",
-    timeout: 30000,
-    retryAttempts: 3
-  },
-  chunkAugment: {
-    contextWindow: 3, // Number of previous Aero messages to include
-    minChunkSize: 100,
-    maxChunkSize: 5000
-  },
-  tts: {
-    rate: 1.0,
-    pitch: 1.0,
-    volume: 1.0,
-    voice: null // Will use default or user preference
+// ============================================================================
+// DOM ELEMENTS
+// ============================================================================
+
+const elements = {
+  // Sidebar
+  sidebar: document.getElementById("sidebar"),
+  sidebarToggle: document.getElementById("sidebar-toggle"),
+  newChatBtn: document.getElementById("new-chat-btn"),
+  chatList: document.getElementById("chat-list"),
+  searchChats: document.getElementById("search-chats"),
+  exportAllBtn: document.getElementById("export-all-btn"),
+  importChatsBtn: document.getElementById("import-chats-btn"),
+  clearAllBtn: document.getElementById("clear-all-btn"),
+  shortcutsBtn: document.getElementById("shortcuts-btn"),
+
+  // Header
+  chatTitle: document.getElementById("chat-title"),
+  debugToggle: document.getElementById("debug-toggle"),
+  exportChatBtn: document.getElementById("export-chat-btn"),
+
+  // Provenance
+  provenanceBanner: document.getElementById("provenance-banner"),
+  modelName: document.getElementById("model-name"),
+
+  // Debug
+  debugPanel: document.getElementById("debug-panel"),
+  debugOverride: document.getElementById("debug-override"),
+  debugTokens: document.getElementById("debug-tokens"),
+  debugMessages: document.getElementById("debug-messages"),
+  debugSession: document.getElementById("debug-session"),
+  debugModel: document.getElementById("debug-model"),
+
+  // Toolbar
+  modelSelect: document.getElementById("model-select"),
+  systemMode: document.getElementById("system-mode"),
+  tokenCounter: document.getElementById("token-counter"),
+  regenerateBtn: document.getElementById("regenerate-btn"),
+  stopBtn: document.getElementById("stop-btn"),
+  clearBtn: document.getElementById("clear-btn"),
+
+  // Chat
+  messages: document.getElementById("messages"),
+  typingIndicator: document.getElementById("typing-indicator"),
+  composer: document.getElementById("composer"),
+  prompt: document.getElementById("prompt"),
+  send: document.getElementById("send"),
+
+  // Modals
+  renameModal: document.getElementById("rename-modal"),
+  renameInput: document.getElementById("rename-input"),
+  renameCancel: document.getElementById("rename-cancel"),
+  renameConfirm: document.getElementById("rename-confirm"),
+  importModal: document.getElementById("import-modal"),
+  importTextarea: document.getElementById("import-textarea"),
+  importCancel: document.getElementById("import-cancel"),
+  importConfirm: document.getElementById("import-confirm"),
+
+  // Shortcuts
+  shortcutsHelp: document.getElementById("shortcuts-help"),
+};
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+async function init() {
+  console.log("🚀 AeroAI Pro initializing...");
+
+  // Initialize Mermaid
+  if (window.mermaid) {
+    mermaid.initialize({ startOnLoad: false, theme: 'default' });
   }
-};
 
-// ========================================
-// Initialization
-// ========================================
-function init() {
+  // Load config from backend
+  await loadConfig();
+
+  // Setup event listeners
   setupEventListeners();
-  loadUserPreferences();
-  displayWelcomeMessage();
 
-  // Focus input on load
-  userInput.focus();
+  // Load chats from localStorage
+  loadChats();
+
+  // Create or load current chat
+  if (state.chats.size === 0) {
+    createNewChat();
+  } else {
+    // Load most recent chat
+    const sortedChats = Array.from(state.chats.values()).sort((a, b) => b.updated - a.updated);
+    switchToChat(sortedChats[0].id);
+  }
+
+  // Render chat list
+  renderChatList();
+
+  console.log("✓ AeroAI Pro ready");
+}
+
+async function loadConfig() {
+  try {
+    const response = await fetch("/api/config");
+    if (!response.ok) throw new Error("Failed to load config");
+
+    state.config = await response.json();
+
+    // Populate model selector
+    elements.modelSelect.innerHTML = state.config.models
+      .map(m => `<option value="${m.id}">${m.name} (${m.tier})</option>`)
+      .join("");
+
+    // Update provenance
+    const provenance = state.config.provenance;
+    elements.modelName.textContent = provenance.model.split('/').pop() || provenance.model;
+
+    console.log("✓ Config loaded:", state.config);
+  } catch (error) {
+    console.error("Failed to load config:", error);
+    showNotification("Failed to connect to Aero. Please refresh.", "error");
+  }
 }
 
 function setupEventListeners() {
-  // Input auto-resize
-  userInput.addEventListener("input", handleInputResize);
+  // Sidebar
+  elements.sidebarToggle.addEventListener("click", toggleSidebar);
+  elements.newChatBtn.addEventListener("click", createNewChat);
+  elements.searchChats.addEventListener("input", handleSearch);
+  elements.exportAllBtn.addEventListener("click", exportAllChats);
+  elements.importChatsBtn.addEventListener("click", () => showModal("import"));
+  elements.clearAllBtn.addEventListener("click", clearAllChats);
+  elements.shortcutsBtn.addEventListener("click", toggleShortcutsHelp);
 
-  // Send message handlers
-  userInput.addEventListener("keydown", handleKeyPress);
-  sendButton.addEventListener("click", handleSendClick);
-
-  // Settings handlers
-  if (tutorModeCheckbox) {
-    tutorModeCheckbox.addEventListener("change", () => {
-      state.tutorMode = tutorModeCheckbox.checked;
-      saveUserPreferences();
-    });
-  }
-
-  if (chunkSizeInput) {
-    chunkSizeInput.addEventListener("change", () => {
-      const newSize = parseInt(chunkSizeInput.value, 10);
-      if (newSize >= config.chunkAugment.minChunkSize &&
-        newSize <= config.chunkAugment.maxChunkSize) {
-        state.chunkSize = newSize;
-        saveUserPreferences();
-      }
-    });
-  }
-
-  if (ttsToggle) {
-    ttsToggle.addEventListener("change", () => {
-      state.ttsEnabled = ttsToggle.checked;
-      if (!state.ttsEnabled) {
-        stopTTS();
-      }
-      saveUserPreferences();
-    });
-  }
-}
-
-// ========================================
-// Input Handlers
-// ========================================
-function handleInputResize() {
-  userInput.style.height = "auto";
-  userInput.style.height = `${userInput.scrollHeight}px`;
-}
-
-function handleKeyPress(e) {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-}
-
-function handleSendClick() {
-  sendMessage();
-}
-
-// ========================================
-// Message Management
-// ========================================
-function addMessageToChat(role, content, streaming = false) {
-  const messageEl = document.createElement("div");
-  messageEl.className = `message ${role}-message`;
-  messageEl.setAttribute("role", "article");
-  messageEl.setAttribute("aria-label", `${role} message`);
-
-  // Parse markdown
-  messageEl.innerHTML = marked.parse(content);
-
-  // Add copy buttons to code blocks
-  addCopyButtons(messageEl);
-
-  chatMessages.appendChild(messageEl);
-  scrollToBottom();
-
-  // Handle TTS for Aero messages
-  if (role === "aero" && state.ttsEnabled && !streaming) {
-    queueTTS(content);
-  }
-
-  return messageEl;
-}
-
-function updateMessageContent(messageEl, content) {
-  messageEl.innerHTML = marked.parse(content);
-  addCopyButtons(messageEl);
-  scrollToBottom();
-}
-
-function addCopyButtons(containerEl) {
-  containerEl.querySelectorAll("pre").forEach(pre => {
-    // Skip if copy button already exists
-    if (pre.querySelector(".copy-btn")) return;
-
-    const btn = document.createElement("button");
-    btn.className = "copy-btn";
-    btn.textContent = "Copy";
-    btn.setAttribute("aria-label", "Copy code to clipboard");
-
-    btn.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(pre.textContent);
-        btn.textContent = "Copied!";
-        setTimeout(() => btn.textContent = "Copy", 2000);
-      } catch (err) {
-        console.error("Failed to copy:", err);
-        btn.textContent = "Failed";
-        setTimeout(() => btn.textContent = "Copy", 2000);
-      }
-    };
-
-    pre.style.position = "relative";
-    pre.appendChild(btn);
-  });
-}
-
-function scrollToBottom(smooth = true) {
-  chatMessages.scrollTo({
-    top: chatMessages.scrollHeight,
-    behavior: smooth ? "smooth" : "auto"
-  });
-}
-
-function displayWelcomeMessage() {
-  if (state.chatHistory.length > 0) {
-    addMessageToChat("aero", state.chatHistory[0].content);
-  }
-}
-
-// ========================================
-// ChunkAugment 2.0 Processing
-// ========================================
-function prepareChunkAugmentData(message) {
-  // Split message into chunks
-  const chunks = [];
-  for (let i = 0; i < message.length; i += state.chunkSize) {
-    chunks.push(message.slice(i, i + state.chunkSize));
-  }
-
-  // Extract context from recent Aero messages
-  const contextChunks = state.chatHistory
-    .filter(m => m.role === "aero")
-    .slice(-config.chunkAugment.contextWindow)
-    .map(m => m.content);
-
-  return {
-    chunks,
-    contextChunks,
-    metadata: {
-      totalChunks: chunks.length,
-      chunkSize: state.chunkSize,
-      contextWindow: config.chunkAugment.contextWindow
+  // Header
+  elements.chatTitle.addEventListener("blur", saveChatTitle);
+  elements.chatTitle.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      elements.chatTitle.blur();
     }
-  };
+  });
+  elements.debugToggle.addEventListener("click", toggleDebugMode);
+  elements.exportChatBtn.addEventListener("click", exportCurrentChat);
+
+  // Debug
+  elements.debugOverride.addEventListener("input", (e) => {
+    state.debugOverride = e.target.value;
+  });
+
+  // Toolbar
+  elements.regenerateBtn.addEventListener("click", handleRegenerate);
+  elements.stopBtn.addEventListener("click", handleStop);
+  elements.clearBtn.addEventListener("click", clearCurrentChat);
+
+  // Composer
+  elements.composer.addEventListener("submit", (e) => {
+    e.preventDefault();
+    handleSend();
+  });
+
+  elements.prompt.addEventListener("input", () => {
+    elements.prompt.style.height = "auto";
+    elements.prompt.style.height = `${elements.prompt.scrollHeight}px`;
+    updateTokenCount();
+  });
+
+  elements.prompt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  });
+
+  // Modals
+  elements.renameCancel.addEventListener("click", () => hideModal("rename"));
+  elements.renameConfirm.addEventListener("click", confirmRename);
+  elements.importCancel.addEventListener("click", () => hideModal("import"));
+  elements.importConfirm.addEventListener("click", confirmImport);
+
+  // Click outside modal to close
+  elements.renameModal.addEventListener("click", (e) => {
+    if (e.target === elements.renameModal) hideModal("rename");
+  });
+  elements.importModal.addEventListener("click", (e) => {
+    if (e.target === elements.importModal) hideModal("import");
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener("keydown", handleKeyboardShortcut);
 }
 
-// ========================================
-// API Communication
-// ========================================
-async function sendMessage() {
-  const message = userInput.value.trim();
+// ============================================================================
+// CHAT MANAGEMENT
+// ============================================================================
 
-  // Validation
-  if (!message || state.isProcessing) return;
+function createNewChat() {
+  const chat = {
+    id: `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    title: "New Chat",
+    messages: [],
+    created: Date.now(),
+    updated: Date.now(),
+    sessionId: generateSessionId(),
+  };
 
-  // Update UI state
-  setProcessingState(true);
+  state.chats.set(chat.id, chat);
+  switchToChat(chat.id);
+  saveChats();
+  renderChatList();
 
-  // Add user message to chat
-  addMessageToChat("user", message);
-  state.chatHistory.push({
-    role: "user",
-    content: message,
-    timestamp: Date.now()
+  // Add welcome message
+  addWelcomeMessage();
+}
+
+function switchToChat(chatId) {
+  if (!state.chats.has(chatId)) return;
+
+  state.currentChatId = chatId;
+  const chat = getCurrentChat();
+
+  // Update title
+  elements.chatTitle.value = chat.title;
+
+  // Clear and render messages
+  elements.messages.innerHTML = "";
+  chat.messages.forEach(msg => {
+    addMessageToDOM(msg.role, msg.content, msg.id, false);
   });
+
+  // Update UI
+  renderChatList();
+  updateDebugStats();
+  updateTokenCount();
+
+  // Enable/disable regenerate
+  const lastMessage = chat.messages[chat.messages.length - 1];
+  elements.regenerateBtn.disabled = !lastMessage || lastMessage.role !== "assistant";
+
+  // Focus input
+  elements.prompt.focus();
+}
+
+function getCurrentChat() {
+  return state.chats.get(state.currentChatId);
+}
+
+function deleteChat(chatId) {
+  if (!confirm("Delete this chat? This cannot be undone.")) return;
+
+  state.chats.delete(chatId);
+
+  // If deleting current chat, switch to another or create new
+  if (chatId === state.currentChatId) {
+    if (state.chats.size > 0) {
+      const firstChat = Array.from(state.chats.values())[0];
+      switchToChat(firstChat.id);
+    } else {
+      createNewChat();
+    }
+  }
+
+  saveChats();
+  renderChatList();
+}
+
+function saveChatTitle() {
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  chat.title = elements.chatTitle.value.trim() || "New Chat";
+  chat.updated = Date.now();
+  saveChats();
+  renderChatList();
+}
+
+function clearCurrentChat() {
+  if (!confirm("Clear all messages? This cannot be undone.")) return;
+
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  chat.messages = [];
+  chat.updated = Date.now();
+
+  elements.messages.innerHTML = "";
+  saveChats();
+  addWelcomeMessage();
+  updateTokenCount();
+}
+
+function clearAllChats() {
+  if (!confirm("Delete ALL chats? This cannot be undone and will clear all localStorage data.")) return;
+
+  state.chats.clear();
+  createNewChat();
+  saveChats();
+  renderChatList();
+}
+
+// ============================================================================
+// CHAT LIST RENDERING
+// ============================================================================
+
+function renderChatList() {
+  const searchTerm = elements.searchChats.value.toLowerCase();
+  const sortedChats = Array.from(state.chats.values())
+    .sort((a, b) => b.updated - a.updated);
+
+  elements.chatList.innerHTML = sortedChats
+    .filter(chat => {
+      if (!searchTerm) return true;
+      return chat.title.toLowerCase().includes(searchTerm) ||
+             chat.messages.some(m => m.content.toLowerCase().includes(searchTerm));
+    })
+    .map(chat => createChatItem(chat))
+    .join("");
+}
+
+function createChatItem(chat) {
+  const isActive = chat.id === state.currentChatId;
+  const preview = chat.messages.length > 0
+    ? chat.messages[chat.messages.length - 1].content.substring(0, 60)
+    : "No messages yet";
+
+  return `
+    <div class="chat-item ${isActive ? 'active' : ''}" onclick="switchToChat('${chat.id}')">
+      <div class="chat-item-content">
+        <div class="chat-item-title">${escapeHtml(chat.title)}</div>
+        <div class="chat-item-preview">${escapeHtml(preview)}...</div>
+      </div>
+      <div class="chat-item-actions">
+        <button class="chat-item-btn" onclick="event.stopPropagation(); renameChat('${chat.id}')" title="Rename">✏️</button>
+        <button class="chat-item-btn" onclick="event.stopPropagation(); deleteChat('${chat.id}')" title="Delete">🗑️</button>
+      </div>
+    </div>
+  `;
+}
+
+function renameChat(chatId) {
+  state.renamingChatId = chatId;
+  const chat = state.chats.get(chatId);
+  elements.renameInput.value = chat.title;
+  showModal("rename");
+  elements.renameInput.focus();
+  elements.renameInput.select();
+}
+
+function confirmRename() {
+  const chat = state.chats.get(state.renamingChatId);
+  if (!chat) return;
+
+  chat.title = elements.renameInput.value.trim() || "New Chat";
+  chat.updated = Date.now();
+
+  if (state.renamingChatId === state.currentChatId) {
+    elements.chatTitle.value = chat.title;
+  }
+
+  saveChats();
+  renderChatList();
+  hideModal("rename");
+}
+
+// ============================================================================
+// MESSAGING
+// ============================================================================
+
+async function handleSend() {
+  const message = elements.prompt.value.trim();
+  if (!message || state.isGenerating) return;
+
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  // Add user message
+  const userMsgId = addMessage("user", message);
 
   // Clear input
-  userInput.value = "";
-  userInput.style.height = "auto";
+  elements.prompt.value = "";
+  elements.prompt.style.height = "auto";
 
-  // Show typing indicator
-  typingIndicator.classList.add("visible");
+  // Update chat
+  chat.updated = Date.now();
+  saveChats();
+
+  // Send to API
+  await sendMessage();
+}
+
+function addMessage(role, content, save = true) {
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  if (save) {
+    const chat = getCurrentChat();
+    if (!chat) return;
+
+    chat.messages.push({ id: msgId, role, content, timestamp: Date.now() });
+    saveChats();
+  }
+
+  addMessageToDOM(role, content, msgId, save);
+  updateTokenCount();
+
+  return msgId;
+}
+
+function addWelcomeMessage() {
+  addMessage("assistant", "👋 Hey there! I'm **Aero Pro** — small, speedy, and now with enhanced markdown, multiple chats, and debug tools. What can I help you with today?");
+}
+
+function addMessageToDOM(role, content, msgId, animate = true) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-wrapper";
+  wrapper.dataset.id = msgId;
+
+  const message = document.createElement("div");
+  message.className = `message ${role}`;
+  message.innerHTML = renderMarkdown(content);
+
+  wrapper.appendChild(message);
+
+  // Add message actions
+  if (role !== "system") {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    actions.innerHTML = `
+      <button class="message-btn" onclick="copyMessage('${msgId}')" title="Copy">📋</button>
+      <button class="message-btn" onclick="deleteMessage('${msgId}')" title="Delete">🗑️</button>
+      ${role === "assistant" ? `<button class="message-btn" onclick="regenerateMessage('${msgId}')" title="Regenerate">🔄</button>` : ''}
+    `;
+    wrapper.appendChild(actions);
+  }
+
+  elements.messages.appendChild(wrapper);
+  scrollToBottom();
+
+  // Render Mermaid diagrams
+  if (window.mermaid) {
+    mermaid.run({ querySelector: '.mermaid' });
+  }
+}
+
+function updateMessageContent(msgId, content) {
+  const wrapper = document.querySelector(`[data-id="${msgId}"]`);
+  if (!wrapper) return;
+
+  const message = wrapper.querySelector(".message");
+  message.innerHTML = renderMarkdown(content);
+
+  // Re-render Mermaid
+  if (window.mermaid) {
+    mermaid.run({ querySelector: '.mermaid' });
+  }
+
+  scrollToBottom();
+}
+
+async function sendMessage() {
+  setGeneratingState(true);
+  elements.typingIndicator.classList.add("visible");
+
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  // Create abort controller
+  state.abortController = new AbortController();
+
+  // Prepare request
+  const requestBody = {
+    session_id: chat.sessionId,
+    messages: chat.messages.map(m => ({ role: m.role, content: m.content })),
+    model: elements.modelSelect.value || undefined,
+    system_mode: elements.systemMode.value,
+  };
+
+  // Debug mode override
+  if (state.debugMode && state.debugOverride.trim()) {
+    requestBody.messages = requestBody.messages.filter(m => m.role !== "system");
+    requestBody.messages.unshift({ role: "system", content: state.debugOverride.trim() });
+  }
 
   try {
-    // Prepare ChunkAugment data
-    const chunkData = prepareChunkAugmentData(message);
-
-    // Create streaming message element
-    const aeroMessageEl = document.createElement("div");
-    aeroMessageEl.className = "message aero-message";
-    aeroMessageEl.innerHTML = "<p></p>";
-    aeroMessageEl.setAttribute("role", "article");
-    aeroMessageEl.setAttribute("aria-label", "Aero message");
-    aeroMessageEl.setAttribute("aria-live", "polite");
-    chatMessages.appendChild(aeroMessageEl);
-    scrollToBottom(false);
-
-    // Send request with retry logic
-    const response = await fetchWithRetry(config.api.endpoint, {
+    const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: state.chatHistory,
-        tutorMode: state.tutorMode,
-        chunkSize: state.chunkSize,
-        contextChunks: chunkData.contextChunks,
-        chunkMetadata: chunkData.metadata
-      }),
+      body: JSON.stringify(requestBody),
+      signal: state.abortController.signal,
     });
 
     if (!response.ok) {
-      throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      const errorData = await response.json();
+      handleAPIError(response.status, errorData);
+      return;
     }
 
-    // Handle streaming response
-    await handleStreamingResponse(response, aeroMessageEl);
+    // Handle streaming
+    await handleStreamingResponse(response);
 
-  } catch (err) {
-    console.error("Error sending message:", err);
-    handleError(err);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      console.log("Request aborted");
+      showNotification("Generation stopped", "info");
+    } else {
+      console.error("Send error:", error);
+      showNotification("Oops — Aero ran out of breath. Try again in a moment.", "error");
+    }
   } finally {
-    typingIndicator.classList.remove("visible");
-    setProcessingState(false);
+    elements.typingIndicator.classList.remove("visible");
+    setGeneratingState(false);
+    state.abortController = null;
   }
 }
 
-async function handleStreamingResponse(response, messageEl) {
+async function handleStreamingResponse(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let fullResponse = "";
+
+  // Create assistant message
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const chat = getCurrentChat();
+
+  chat.messages.push({ id: msgId, role: "assistant", content: "", timestamp: Date.now() });
+  addMessageToDOM("assistant", "", msgId);
+
+  let fullContent = "";
   let buffer = "";
 
   while (true) {
@@ -315,198 +558,502 @@ async function handleStreamingResponse(response, messageEl) {
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
-
-    // Keep the last incomplete line in buffer
     buffer = lines.pop() || "";
 
     for (const line of lines) {
       if (!line.trim()) continue;
 
       try {
-        const jsonData = JSON.parse(line);
+        const data = JSON.parse(line);
 
-        if (jsonData.response) {
-          fullResponse += jsonData.response;
-          updateMessageContent(messageEl, fullResponse);
+        if (data.response) {
+          fullContent += data.response;
 
-          // Stream TTS if enabled
-          if (state.ttsEnabled) {
-            speakText(jsonData.response);
-          }
+          // Update message in state
+          const msg = chat.messages.find(m => m.id === msgId);
+          if (msg) msg.content = fullContent;
+
+          // Update DOM
+          updateMessageContent(msgId, fullContent);
         }
-
-        if (jsonData.error) {
-          throw new Error(jsonData.error);
-        }
-
       } catch (e) {
-        if (e instanceof SyntaxError) {
-          console.warn("Failed to parse JSON line:", line);
-        } else {
-          throw e;
+        if (!(e instanceof SyntaxError)) {
+          console.error("Stream parsing error:", e);
         }
       }
     }
   }
 
-  // Add final response to history
-  state.chatHistory.push({
-    role: "aero",
-    content: fullResponse,
-    timestamp: Date.now()
+  // Save and update UI
+  chat.updated = Date.now();
+  saveChats();
+  elements.regenerateBtn.disabled = false;
+  updateDebugStats();
+}
+
+function handleAPIError(status, errorData) {
+  const { error, message, retry_after } = errorData;
+
+  if (status === 429) {
+    const retryMsg = retry_after ? ` Try again in ${retry_after}s.` : "";
+    showNotification(`Aero's on a coffee break.${retryMsg}`, "warning");
+  } else {
+    showNotification(message || "Oops — something went wrong.", "error");
+  }
+}
+
+// ============================================================================
+// MESSAGE ACTIONS
+// ============================================================================
+
+async function handleRegenerate() {
+  const chat = getCurrentChat();
+  if (!chat || chat.messages.length === 0) return;
+
+  // Remove last assistant message
+  const lastMsg = chat.messages[chat.messages.length - 1];
+  if (lastMsg.role !== "assistant") return;
+
+  chat.messages.pop();
+
+  // Remove from DOM
+  const wrapper = document.querySelector(`[data-id="${lastMsg.id}"]`);
+  if (wrapper) wrapper.remove();
+
+  saveChats();
+
+  // Resend
+  await sendMessage();
+}
+
+function handleStop() {
+  if (state.abortController) {
+    state.abortController.abort();
+  }
+}
+
+function copyMessage(msgId) {
+  const chat = getCurrentChat();
+  const msg = chat.messages.find(m => m.id === msgId);
+  if (!msg) return;
+
+  navigator.clipboard.writeText(msg.content).then(() => {
+    showNotification("Copied to clipboard", "success");
+  }).catch(err => {
+    console.error("Failed to copy:", err);
   });
 }
 
-async function fetchWithRetry(url, options, attempt = 1) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), config.api.timeout);
+function deleteMessage(msgId) {
+  if (!confirm("Delete this message?")) return;
 
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
+  const chat = getCurrentChat();
+  chat.messages = chat.messages.filter(m => m.id !== msgId);
+
+  const wrapper = document.querySelector(`[data-id="${msgId}"]`);
+  if (wrapper) wrapper.remove();
+
+  saveChats();
+  updateTokenCount();
+}
+
+function regenerateMessage(msgId) {
+  // Find message index and regenerate from there
+  const chat = getCurrentChat();
+  const msgIndex = chat.messages.findIndex(m => m.id === msgId);
+  if (msgIndex === -1) return;
+
+  // Remove this message and all after it
+  chat.messages = chat.messages.slice(0, msgIndex);
+
+  // Remove from DOM
+  document.querySelectorAll(".message-wrapper").forEach((wrapper, idx) => {
+    if (idx >= msgIndex) wrapper.remove();
+  });
+
+  saveChats();
+
+  // Resend
+  sendMessage();
+}
+
+// ============================================================================
+// MARKDOWN RENDERING (Enhanced)
+// ============================================================================
+
+function renderMarkdown(content) {
+  // Configure marked
+  marked.setOptions({
+    highlight: function(code, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        try {
+          return hljs.highlight(code, { language: lang }).value;
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      return code;
+    },
+    breaks: true,
+    gfm: true,
+  });
+
+  let html = marked.parse(content);
+
+  // LaTeX rendering
+  html = renderLaTeX(html);
+
+  // Mermaid diagrams
+  html = renderMermaid(html);
+
+  // Add copy buttons to code blocks
+  html = addCopyButtonsToHTML(html);
+
+  return html;
+}
+
+function renderLaTeX(html) {
+  // Inline math: $...$
+  html = html.replace(/\$([^\$]+)\$/g, (match, tex) => {
+    try {
+      return katex.renderToString(tex, { throwOnError: false });
+    } catch (e) {
+      return match;
+    }
+  });
+
+  // Block math: $$...$$
+  html = html.replace(/\$\$([^\$]+)\$\$/g, (match, tex) => {
+    try {
+      return katex.renderToString(tex, { displayMode: true, throwOnError: false });
+    } catch (e) {
+      return match;
+    }
+  });
+
+  return html;
+}
+
+function renderMermaid(html) {
+  // Replace mermaid code blocks with div.mermaid
+  html = html.replace(/<pre><code class="language-mermaid">([^<]+)<\/code><\/pre>/g, (match, code) => {
+    return `<div class="mermaid">${code}</div>`;
+  });
+
+  return html;
+}
+
+function addCopyButtonsToHTML(html) {
+  const temp = document.createElement("div");
+  temp.innerHTML = html;
+
+  temp.querySelectorAll("pre code").forEach(code => {
+    const pre = code.parentElement;
+    if (!pre.querySelector(".copy-btn")) {
+      const btn = document.createElement("button");
+      btn.className = "copy-btn";
+      btn.textContent = "Copy";
+      btn.onclick = async () => {
+        await navigator.clipboard.writeText(code.textContent);
+        btn.textContent = "Copied!";
+        setTimeout(() => btn.textContent = "Copy", 2000);
+      };
+      pre.style.position = "relative";
+      pre.appendChild(btn);
+    }
+  });
+
+  return temp.innerHTML;
+}
+
+// ============================================================================
+// DEBUG MODE
+// ============================================================================
+
+function toggleDebugMode() {
+  state.debugMode = !state.debugMode;
+  elements.debugPanel.classList.toggle("visible", state.debugMode);
+  elements.debugToggle.classList.toggle("active", state.debugMode);
+
+  if (state.debugMode) {
+    updateDebugStats();
+  }
+}
+
+function updateDebugStats() {
+  if (!state.debugMode) return;
+
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  const tokens = estimateTokens(chat.messages);
+
+  elements.debugTokens.textContent = tokens;
+  elements.debugMessages.textContent = chat.messages.length;
+  elements.debugSession.textContent = chat.sessionId.substring(0, 16) + "...";
+  elements.debugModel.textContent = elements.modelSelect.value || "default";
+}
+
+function estimateTokens(messages) {
+  // Rough estimate: ~4 chars per token
+  return Math.ceil(messages.reduce((sum, m) => sum + m.content.length, 0) / 4);
+}
+
+// ============================================================================
+// TOKEN COUNTER
+// ============================================================================
+
+function updateTokenCount() {
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  const currentInput = elements.prompt.value;
+  const totalContent = chat.messages.reduce((sum, m) => sum + m.content.length, 0) + currentInput.length;
+  const tokens = Math.ceil(totalContent / 4);
+
+  elements.tokenCounter.textContent = `Tokens: ${tokens}`;
+
+  // Update debug if active
+  if (state.debugMode) {
+    updateDebugStats();
+  }
+}
+
+// ============================================================================
+// IMPORT / EXPORT
+// ============================================================================
+
+function exportCurrentChat() {
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  const exportData = {
+    version: "5.0",
+    exported: new Date().toISOString(),
+    chats: [chat],
+  };
+
+  downloadJSON(exportData, `aero-chat-${chat.title.replace(/\s+/g, "-")}.json`);
+  showNotification("Chat exported successfully", "success");
+}
+
+function exportAllChats() {
+  const exportData = {
+    version: "5.0",
+    exported: new Date().toISOString(),
+    chats: Array.from(state.chats.values()),
+  };
+
+  downloadJSON(exportData, `aero-all-chats-${Date.now()}.json`);
+  showNotification("All chats exported successfully", "success");
+}
+
+function confirmImport() {
+  try {
+    const jsonData = JSON.parse(elements.importTextarea.value);
+
+    if (!jsonData.chats || !Array.isArray(jsonData.chats)) {
+      throw new Error("Invalid format");
+    }
+
+    // Import chats
+    jsonData.chats.forEach(chat => {
+      // Generate new ID to avoid conflicts
+      chat.id = `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      chat.imported = Date.now();
+      state.chats.set(chat.id, chat);
     });
 
-    clearTimeout(timeoutId);
-    return response;
+    saveChats();
+    renderChatList();
+    hideModal("import");
+    showNotification(`Imported ${jsonData.chats.length} chat(s)`, "success");
 
-  } catch (err) {
-    if (attempt < config.api.retryAttempts) {
-      console.warn(`Request failed (attempt ${attempt}), retrying...`);
-      await sleep(1000 * attempt); // Exponential backoff
-      return fetchWithRetry(url, options, attempt + 1);
-    }
-    throw err;
+  } catch (error) {
+    console.error("Import error:", error);
+    showNotification("Invalid JSON format", "error");
   }
 }
 
-// ========================================
-// Text-to-Speech
-// ========================================
-function queueTTS(text) {
-  state.ttsQueue.push(text);
-  if (!state.currentUtterance) {
-    processTTSQueue();
+function downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================================
+// SEARCH
+// ============================================================================
+
+function handleSearch() {
+  renderChatList();
+}
+
+// ============================================================================
+// KEYBOARD SHORTCUTS
+// ============================================================================
+
+function handleKeyboardShortcut(e) {
+  const ctrl = e.ctrlKey || e.metaKey;
+
+  // Ctrl+N: New Chat
+  if (ctrl && e.key === "n") {
+    e.preventDefault();
+    createNewChat();
+  }
+
+  // Ctrl+K: Search
+  if (ctrl && e.key === "k") {
+    e.preventDefault();
+    elements.searchChats.focus();
+    elements.searchChats.select();
+  }
+
+  // Ctrl+B: Toggle Sidebar
+  if (ctrl && e.key === "b") {
+    e.preventDefault();
+    toggleSidebar();
+  }
+
+  // Ctrl+D: Debug Mode
+  if (ctrl && e.key === "d") {
+    e.preventDefault();
+    toggleDebugMode();
+  }
+
+  // Ctrl+E: Export
+  if (ctrl && e.key === "e") {
+    e.preventDefault();
+    exportCurrentChat();
+  }
+
+  // Ctrl+L: Clear Chat
+  if (ctrl && e.key === "l") {
+    e.preventDefault();
+    clearCurrentChat();
+  }
+
+  // Escape: Focus Input
+  if (e.key === "Escape") {
+    elements.prompt.focus();
+    hideModal("rename");
+    hideModal("import");
+    elements.shortcutsHelp.classList.remove("visible");
   }
 }
 
-function processTTSQueue() {
-  if (state.ttsQueue.length === 0) {
-    state.currentUtterance = null;
-    return;
-  }
-
-  const text = state.ttsQueue.shift();
-  speakText(text);
+function toggleShortcutsHelp() {
+  elements.shortcutsHelp.classList.toggle("visible");
 }
 
-function speakText(text) {
-  if (!state.ttsEnabled) return;
+// ============================================================================
+// UI HELPERS
+// ============================================================================
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = config.tts.rate;
-  utterance.pitch = config.tts.pitch;
-  utterance.volume = config.tts.volume;
-
-  if (config.tts.voice) {
-    utterance.voice = config.tts.voice;
-  }
-
-  utterance.onend = () => {
-    processTTSQueue();
-  };
-
-  utterance.onerror = (err) => {
-    console.error("TTS error:", err);
-    processTTSQueue();
-  };
-
-  state.currentUtterance = utterance;
-  speechSynthesis.speak(utterance);
+function toggleSidebar() {
+  elements.sidebar.classList.toggle("collapsed");
 }
 
-function stopTTS() {
-  speechSynthesis.cancel();
-  state.ttsQueue = [];
-  state.currentUtterance = null;
-}
+function setGeneratingState(generating) {
+  state.isGenerating = generating;
+  elements.prompt.disabled = generating;
+  elements.send.disabled = generating;
+  elements.stopBtn.disabled = !generating;
+  elements.regenerateBtn.disabled = generating;
 
-// ========================================
-// UI State Management
-// ========================================
-function setProcessingState(processing) {
-  state.isProcessing = processing;
-  userInput.disabled = processing;
-  sendButton.disabled = processing;
-
-  if (!processing) {
-    userInput.focus();
+  if (!generating) {
+    elements.prompt.focus();
   }
 }
 
-function handleError(error) {
-  const errorMessage = error.message || "An unexpected error occurred";
-  addMessageToChat("aero", `⚠️ **Error**: ${errorMessage}\n\nPlease try again or contact support if the issue persists.`);
+function showModal(type) {
+  if (type === "rename") {
+    elements.renameModal.classList.add("visible");
+  } else if (type === "import") {
+    elements.importModal.classList.add("visible");
+  }
 }
 
-// ========================================
-// Persistence
-// ========================================
-function saveUserPreferences() {
-  const preferences = {
-    tutorMode: state.tutorMode,
-    chunkSize: state.chunkSize,
-    ttsEnabled: state.ttsEnabled
-  };
+function hideModal(type) {
+  if (type === "rename") {
+    elements.renameModal.classList.remove("visible");
+  } else if (type === "import") {
+    elements.importModal.classList.remove("visible");
+    elements.importTextarea.value = "";
+  }
+}
 
+function showNotification(message, type = "info") {
+  // Simple console notification for now
+  // Could be enhanced with toast notifications
+  const icon = type === "success" ? "✓" : type === "error" ? "✗" : "ℹ";
+  console.log(`${icon} ${message}`);
+
+  // You could add a toast notification here
+}
+
+function scrollToBottom() {
+  elements.messages.scrollTo({
+    top: elements.messages.scrollHeight,
+    behavior: "smooth"
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function generateSessionId() {
+  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// ============================================================================
+// PERSISTENCE
+// ============================================================================
+
+function saveChats() {
   try {
-    // Store in memory for session
-    window.aeroPreferences = preferences;
-  } catch (err) {
-    console.warn("Failed to save preferences:", err);
+    const chatsArray = Array.from(state.chats.values());
+    localStorage.setItem("aero_pro_chats", JSON.stringify(chatsArray));
+  } catch (error) {
+    console.error("Failed to save chats:", error);
   }
 }
 
-function loadUserPreferences() {
+function loadChats() {
   try {
-    const preferences = window.aeroPreferences || {};
+    const stored = localStorage.getItem("aero_pro_chats");
+    if (!stored) return;
 
-    if (preferences.tutorMode !== undefined) {
-      state.tutorMode = preferences.tutorMode;
-      if (tutorModeCheckbox) tutorModeCheckbox.checked = state.tutorMode;
-    }
+    const chatsArray = JSON.parse(stored);
+    state.chats = new Map(chatsArray.map(chat => [chat.id, chat]));
 
-    if (preferences.chunkSize !== undefined) {
-      state.chunkSize = preferences.chunkSize;
-      if (chunkSizeInput) chunkSizeInput.value = state.chunkSize;
-    }
-
-    if (preferences.ttsEnabled !== undefined) {
-      state.ttsEnabled = preferences.ttsEnabled;
-      if (ttsToggle) ttsToggle.checked = state.ttsEnabled;
-    }
-  } catch (err) {
-    console.warn("Failed to load preferences:", err);
+    console.log(`✓ Loaded ${state.chats.size} chat(s) from storage`);
+  } catch (error) {
+    console.error("Failed to load chats:", error);
   }
 }
 
-// ========================================
-// Utilities
-// ========================================
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// ============================================================================
+// INITIALIZE
+// ============================================================================
 
-// ========================================
-// Initialize App
-// ========================================
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {
   init();
 }
 
-// Export for testing/debugging
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { state, config, sendMessage, addMessageToChat };
-}
+// Make functions available globally for onclick handlers
+window.switchToChat = switchToChat;
+window.deleteChat = deleteChat;
+window.renameChat = renameChat;
+window.copyMessage = copyMessage;
+window.deleteMessage = deleteMessage;
+window.regenerateMessage = regenerateMessage;
